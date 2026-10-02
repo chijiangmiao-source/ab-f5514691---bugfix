@@ -92,10 +92,82 @@ def step1_obstruction_evidence() -> None:
           f"got {obstruction.get('transformedTarget')!r}")
     check("余数精确为 1（主元不能整除变换后目标）",
           obstruction.get("remainder") == "1")
+    check("行变换来源逐项均为精确整数文本",
+          all(
+              isinstance(term.get("coefficient"), str)
+              and isinstance(term.get("target"), str)
+              and isinstance(term.get("product"), str)
+              for term in obstruction.get("uRowTerms", [])
+          ))
     u_terms = obstruction.get("uRowTerms") or []
     total = sum(int(term["product"]) for term in u_terms) if u_terms else None
     check("行变换各项乘积之和等于变换后目标",
           total is not None and str(total) == BIG_TARGET)
+    for term in u_terms:
+        check(
+            f"行变换逐项乘积可复算：{term['coefficient']} × {term['target']} = {term['product']}",
+            str(int(term["coefficient"]) * int(term["target"])) == term["product"],
+        )
+
+
+def verify_solvable_constraints(body, label: str, require_big_correction_two: bool) -> bool:
+    """Recompute every per-constraint term/product/sum from exact integers."""
+    ok = bool(body) and body.get("solvable") is True
+    solution = (body or {}).get("solution")
+    constraints = (body or {}).get("constraints") or []
+    if not ok or not isinstance(solution, list) or not constraints:
+        check(f"{label}：可解且含 solution/constraints 明细", False,
+              f"body={body!r}"[:400])
+        return False
+    all_text = all(
+        isinstance(value, str)
+        for c in constraints
+        for t in c.get("terms", [])
+        for value in (t.get("coefficient"), t.get("correction"), t.get("product"))
+    ) and all(isinstance(c.get("sum"), str) and isinstance(c.get("target"), str)
+              for c in constraints)
+    check(f"{label}：系数/校正量/乘积/左侧和/目标均为精确整数文本", all_text)
+
+    all_ok = True
+    saw_big_coeff_with_correction_2 = False
+    for c in constraints:
+        idx = c.get("index")
+        recomputed_products = []
+        for t in c.get("terms", []):
+            coeff = int(t["coefficient"])
+            correction = int(t["correction"])
+            product = coeff * correction
+            recomputed_products.append(product)
+            if abs(coeff) > 2**53 and correction == 2:
+                saw_big_coeff_with_correction_2 = True
+            if str(product) != t["product"]:
+                check(f"{label} 约束 {idx + 1}：逐项乘积 {t['coefficient']} × "
+                      f"{t['correction']} 精确为 {t['product']}", False,
+                      f"recomputed {product}")
+                all_ok = False
+        left_sum = sum(recomputed_products)
+        target = int(c["target"])
+        row_ok = (
+            str(left_sum) == c["sum"]
+            and left_sum == target
+            and c.get("satisfied") is True
+        )
+        check(f"{label} 约束 {idx + 1}：逐项乘积之和 {left_sum} ＝ 左侧和 {c['sum']}"
+              f" ＝ 目标 {c['target']}，稳定显示相等", row_ok)
+        all_ok = all_ok and row_ok
+    # The corrections displayed inside each term must match the top-level
+    # solution vector, both as exact integer text.
+    for c in constraints:
+        for j, t in enumerate(c.get("terms", [])):
+            if t.get("correction") != solution[j]:
+                check(f"{label} 约束 {c.get('index') + 1} 项 {j + 1}：校正量 "
+                      f"{t.get('correction')} 与解向量 {solution[j]} 一致", False)
+                all_ok = False
+    if require_big_correction_two:
+        check(f"{label}：含超过 2^53 的系数且其对应校正量为 2",
+              saw_big_coeff_with_correction_2)
+        all_ok = all_ok and saw_big_coeff_with_correction_2
+    return all_text and all_ok
 
 
 def run_subprocess(name: str, argv: list[str]) -> None:
@@ -147,6 +219,34 @@ def step3_http_smoke() -> None:
     check("页面 / 返回 200 且包含复核界面", status == 200 and "复核" in text,
           f"status={status}")
 
+    # --- 核心验收：含超大系数（>2^53）且其校正量为 2 的可解耦合系统 ------
+    # 由精确整数解 x = [2, 1, 3] 反推耦合约束构造，整体解与每项目标精确成立：
+    #   BIG*2 + 7*1 + (-3)*3 = 2*BIG - 2
+    #   5*2  + 11*1 + 2*3   = 27
+    #   -4*2 + 3*1  + 9*3   = 22
+    big_coeff = 10**16 + 7  # 10000000000000007 > 2^53
+    big_target = 2 * big_coeff - 2
+    status, body = post_review(
+        {
+            "variables": ["K1", "K2", "K3"],
+            "matrix": [
+                [str(big_coeff), "7", "-3"],
+                ["5", "11", "2"],
+                ["-4", "3", "9"],
+            ],
+            "target": [str(big_target), "27", "22"],
+        }
+    )
+    check("含超大系数的可解耦合复核返回 HTTP 200", status == 200, f"status={status}")
+    check("判定为可解", bool(body) and body.get("solvable") is True,
+          f"body={body!r}"[:400])
+    check("精确整数校正量为 [2, 1, 3]（大系数对应校正量为 2）",
+          bool(body) and body.get("solution") == ["2", "1", "3"],
+          f"solution={(body or {}).get('solution')!r}")
+    if status == 200 and (body or {}).get("solvable"):
+        verify_solvable_constraints(body, "超大系数耦合用例", True)
+
+    # --- 回归：README 原有大整数可解用例，逐约束同样精确可复算 -----------
     status, body = post_review(
         {
             "variables": ["K1", "K2", "K3"],
@@ -158,19 +258,67 @@ def step3_http_smoke() -> None:
             "target": ["18014398509481989", "12", "10"],
         }
     )
-    check("复核接口（可解大整数用例）返回 HTTP 200", status == 200, f"status={status}")
-    check("判定为可解", bool(body) and body.get("solvable") is True,
-          f"body={body!r}"[:400])
+    check("回归可解大整数用例返回 HTTP 200", status == 200, f"status={status}")
     check("精确整数校正量为 [2, 3, 1]",
           bool(body) and body.get("solution") == ["2", "3", "1"])
-    constraints = (body or {}).get("constraints") or []
-    check("每条约束的左侧和均精确等于目标值",
-          bool(constraints) and all(c["satisfied"] for c in constraints))
-    if constraints:
-        first_products = [t["product"] for t in constraints[0]["terms"]]
-        check("首条约束各项乘积精确（含超大整数）",
-              first_products == [str(9007199254740993 * 2), "3", "0"],
-              f"products={first_products!r}")
+    if status == 200 and (body or {}).get("solvable"):
+        verify_solvable_constraints(body, "回归大整数用例", True)
+
+    # --- 回归：普通安全范围整数的可解约束 -------------------------------
+    # 2p + q = 7, p + 3q = 6，解 [3, 1]
+    status, body = post_review(
+        {
+            "variables": ["p", "q"],
+            "matrix": [["2", "1"], ["1", "3"]],
+            "target": ["7", "6"],
+        }
+    )
+    check("普通整数可解用例返回 HTTP 200", status == 200, f"status={status}")
+    check("普通整数用例校正量为 [3, 1]",
+          bool(body) and body.get("solution") == ["3", "1"])
+    if status == 200 and (body or {}).get("solvable"):
+        verify_solvable_constraints(body, "普通整数用例", False)
+
+    # --- 回归：欠定系统的自由校正方向 -----------------------------------
+    # 单约束 2a + 3b = 1 可解；零空间一维，基向量代入必须精确得 0。
+    status, body = post_review(
+        {"variables": ["a", "b"], "matrix": [["2", "3"]], "target": ["1"]}
+    )
+    check("欠定可解用例返回 HTTP 200", status == 200, f"status={status}")
+    basis = (body or {}).get("homogeneousBasis") or []
+    solvable = bool(body) and body.get("solvable") is True
+    check("欠定系统给出 1 个自由校正方向", solvable and len(basis) == 1,
+          f"basis={basis!r}")
+    if solvable and len(basis) == 1:
+        v = [int(z) for z in basis[0]]
+        null_value = 2 * v[0] + 3 * v[1]
+        particular = [int(z) for z in body["solution"]]
+        check("自由方向代入原约束精确为 0（叠加不改变左侧和）",
+              null_value == 0, f"A·v = {null_value}")
+        check("特解满足原约束 2a + 3b = 1",
+              2 * particular[0] + 3 * particular[1] == 1)
+
+    # --- 回归：零行目标非零的无解证据 -----------------------------------
+    # [[1,1],[2,2]] 秩 1，目标 [1,3]：行变换后出现 0 = 1。
+    status, body = post_review(
+        {
+            "variables": ["r", "s"],
+            "matrix": [["1", "1"], ["2", "2"]],
+            "target": ["1", "3"],
+        }
+    )
+    obstruction = (body or {}).get("obstruction") or {}
+    check("零行用例判定为无整数解",
+          status == 200 and (body or {}).get("solvable") is False)
+    check("障碍类型为 zero_row（零行目标非零）",
+          obstruction.get("type") == "zero_row", f"obstruction={obstruction!r}"[:300])
+    check("零行主元精确为 0 且变换后目标非零",
+          obstruction.get("pivot") == "0"
+          and obstruction.get("transformedTarget") not in (None, "0"))
+    z_terms = obstruction.get("uRowTerms") or []
+    z_total = sum(int(t["product"]) for t in z_terms) if z_terms else None
+    check("零行行变换各项乘积之和等于非零变换后目标",
+          z_total is not None and str(z_total) == obstruction.get("transformedTarget"))
 
     status, body = post_review(
         {"variables": ["x"], "matrix": [[1.5]], "target": [1]}

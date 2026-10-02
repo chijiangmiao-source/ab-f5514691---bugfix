@@ -292,27 +292,36 @@ function renderSolution(data) {
 }
 
 function buildConstraintDetails(data) {
-  return data.constraintInputs.map((input) => {
-    let total = 0;
-    const terms = input.coefficients.map((coefficient, index) => {
-      const correction = Number(data.solution[index]);
-      const product = coefficient * correction;
-      total += product;
-      return {
-        variable: data.variables[index],
-        coefficient: String(coefficient),
-        correction: String(correction),
-        product: String(product),
-      };
-    });
-    return {
-      index: input.index,
-      terms,
-      sum: String(total),
-      target: String(input.target),
-      satisfied: total === input.target,
-    };
-  });
+  // Every figure (coefficient / correction / product / sum / target) is
+  // exact decimal integer text computed server-side with arbitrary
+  // precision.  It must be rendered verbatim — never multiplied or summed
+  // via Number, which would corrupt values beyond 2^53.
+  return data.constraints.map((constraint) => ({
+    index: constraint.index,
+    terms: constraint.terms.map((term, index) => ({
+      variable: term.variable || data.variables[index],
+      coefficient: term.coefficient,
+      correction: term.correction,
+      product: term.product,
+    })),
+    sum: constraint.sum,
+    target: constraint.target,
+    // Equality of exact integer text (after light normalisation) is the
+    // audit verdict; the server already derived it from Python integers.
+    satisfied:
+      constraint.satisfied === true ||
+      normalizeIntegerText(constraint.sum) === normalizeIntegerText(constraint.target),
+  }));
+}
+
+function normalizeIntegerText(text) {
+  let digits = String(text).trim().replace(/^\+/, "");
+  const negative = digits.startsWith("-");
+  if (negative) {
+    digits = digits.slice(1);
+  }
+  digits = digits.replace(/^0+(?=\d)/, "") || "0";
+  return (negative && digits !== "0" ? "-" : "") + digits;
 }
 
 function renderConstraintDetail(parent, constraint) {
