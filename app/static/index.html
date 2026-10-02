@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>束流整形磁铁垫片校正复核</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>束流整形磁铁垫片校正复核</h1>
+    <p class="subtitle">整数丢番图方程组精确判定 · 任意精度整数 · 除尽障碍可溯源</p>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="draft-heading">
+      <h2 id="draft-heading">复核草稿</h2>
+      <p class="hint">
+        每项调整量以“最小垫片单位的整数倍”计。系数与目标可超过 2<sup>53</sup>，
+        全程以精确整数文本处理，绝不换算为浮点数。
+      </p>
+
+      <label class="field">
+        <span>变量标识（逗号或空白分隔）</span>
+        <input id="variables" type="text" spellcheck="false" autocomplete="off">
+      </label>
+
+      <label class="field">
+        <span>整系数约束矩阵（每行一条耦合位移约束，系数以空白或逗号分隔）</span>
+        <textarea id="matrix" rows="6" spellcheck="false" autocomplete="off"></textarea>
+      </label>
+
+      <label class="field">
+        <span>目标向量（逗号、空白或换行分隔）</span>
+        <textarea id="target" rows="2" spellcheck="false" autocomplete="off"></textarea>
+      </label>
+
+      <div class="actions">
+        <button id="run" type="button" class="primary">发起复核</button>
+        <button id="cancel" type="button" disabled>取消</button>
+        <span class="spacer"></span>
+        <button id="load-solvable" type="button" class="ghost">载入可解示例</button>
+        <button id="load-unsolvable" type="button" class="ghost">载入无解示例</button>
+      </div>
+
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="panel" id="result-panel" hidden aria-labelledby="result-heading">
+      <h2 id="result-heading">复核结论</h2>
+      <div id="result"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

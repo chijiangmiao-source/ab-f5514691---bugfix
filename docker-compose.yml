@@ -1,0 +1,33 @@
+name: shim-review
+
+services:
+  app:
+    build: .
+    image: shim-review-app
+    environment:
+      PORT: 8080
+    ports:
+      # 宿主端口可通过 HOST_PORT 环境变量配置，默认 8080
+      - "${HOST_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+
+  verify:
+    image: shim-review-app
+    build: .
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      APP_BASE_URL: http://app:8080
+    # 一次性验收：确认无解证据 → 代码测试与构建检查 → HTTP 冒烟，以退出码报告
+    command: ["python", "scripts/verify.py"]
+    restart: "no"
