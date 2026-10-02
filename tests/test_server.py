@@ -88,6 +88,100 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(first["sum"], "18014398509481989")
         self.assertTrue(all(c["satisfied"] for c in body["constraints"]))
 
+    def test_review_solvable_oversized_coefficient_correction_two(self):
+        # Coupled displacement constraints: the oversized coefficient sits on
+        # K1, whose correction is exactly 2.  Every value in the per-constraint
+        # audit must be exact integer text that recomputes to the target.
+        big = 2**64 + 3  # 18446744073709551619, far beyond the safe range
+        status, body = self.post_review(
+            {
+                "variables": ["K1", "K2", "K3"],
+                "matrix": [
+                    [str(big), "1", "0"],
+                    ["1", "3", "1"],
+                    ["0", "2", "4"],
+                ],
+                "target": [str(2 * big + 3), "12", "10"],
+            }
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["solvable"])
+        self.assertEqual(body["solution"], ["2", "3", "1"])
+        self.assertEqual(len(body["constraints"]), 3)
+        for i, constraint in enumerate(body["constraints"]):
+            self.assertEqual(constraint["index"], i)
+            recomputed_sum = 0
+            for term in constraint["terms"]:
+                # Every audit field is exact decimal integer text ...
+                for key in ("coefficient", "correction", "product"):
+                    self.assertIsInstance(term[key], str)
+                    self.assertRegex(term[key], r"^-?\d+$")
+                product = int(term["coefficient"]) * int(term["correction"])
+                # ... the stated product equals coefficient × correction ...
+                self.assertEqual(int(term["product"]), product)
+                recomputed_sum += product
+            self.assertIsInstance(constraint["sum"], str)
+            self.assertIsInstance(constraint["target"], str)
+            # ... and the term-by-term sum equals the stated sum and target.
+            self.assertEqual(str(recomputed_sum), constraint["sum"])
+            self.assertEqual(constraint["sum"], constraint["target"])
+            self.assertTrue(constraint["satisfied"])
+        first = body["constraints"][0]
+        self.assertEqual(first["terms"][0]["coefficient"], str(big))
+        self.assertEqual(first["terms"][0]["correction"], "2")
+        self.assertEqual(first["terms"][0]["product"], str(2 * big))
+        self.assertEqual(first["sum"], str(2 * big + 3))
+
+    def test_review_underdetermined_free_direction(self):
+        status, body = self.post_review(
+            {"variables": ["x", "y"], "matrix": [["2", "3"]], "target": ["1"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["solvable"])
+        x, y = (int(v) for v in body["solution"])
+        self.assertEqual(2 * x + 3 * y, 1)
+        # One free correction direction: 2a + 3b = 0 for the reported vector.
+        self.assertEqual(len(body["homogeneousBasis"]), 1)
+        a, b = (int(v) for v in body["homogeneousBasis"][0])
+        self.assertEqual(2 * a + 3 * b, 0)
+        self.assertTrue(all(c["satisfied"] for c in body["constraints"]))
+
+    def test_review_zero_row_obstruction(self):
+        status, body = self.post_review(
+            {
+                "variables": ["x", "y"],
+                "matrix": [["1", "1"], ["2", "2"]],
+                "target": ["1", "3"],
+            }
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body["solvable"])
+        obstruction = body["obstruction"]
+        self.assertEqual(obstruction["type"], "zero_row")
+        self.assertNotEqual(int(obstruction["transformedTarget"]), 0)
+        total = sum(int(term["product"]) for term in obstruction["uRowTerms"])
+        self.assertEqual(str(total), obstruction["transformedTarget"])
+
+    def test_review_ordinary_solvable_small_integers(self):
+        status, body = self.post_review(
+            {
+                "variables": ["a", "b"],
+                "matrix": [["2", "1"], ["1", "-1"]],
+                "target": ["7", "2"],
+            }
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["solvable"])
+        self.assertEqual(body["solution"], ["3", "1"])
+        self.assertTrue(all(c["satisfied"] for c in body["constraints"]))
+        for constraint in body["constraints"]:
+            total = sum(
+                int(t["coefficient"]) * int(t["correction"])
+                for t in constraint["terms"]
+            )
+            self.assertEqual(str(total), constraint["sum"])
+            self.assertEqual(constraint["sum"], constraint["target"])
+
     def test_review_unsolvable_obstruction(self):
         status, body = self.post_review(
             {

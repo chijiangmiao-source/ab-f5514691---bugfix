@@ -292,25 +292,35 @@ function renderSolution(data) {
 }
 
 function buildConstraintDetails(data) {
-  return data.constraintInputs.map((input) => {
-    let total = 0;
-    const terms = input.coefficients.map((coefficient, index) => {
-      const correction = Number(data.solution[index]);
+  // 服务端已给出每条约束的逐项明细，且所有值均为十进制整数字符串。
+  // 这里在浏览器中用 BigInt 独立复算一遍：绝不经过 Number，因此即使
+  // 系数、乘积或左侧和超过 2^53，相等结论依然精确、稳定。
+  return data.constraints.map((input) => {
+    let bigSum = 0n;
+    const terms = input.terms.map((term) => {
+      const coefficient = BigInt(term.coefficient);
+      const correction = BigInt(term.correction);
       const product = coefficient * correction;
-      total += product;
+      bigSum += product;
       return {
-        variable: data.variables[index],
-        coefficient: String(coefficient),
-        correction: String(correction),
-        product: String(product),
+        variable: term.variable,
+        coefficient: term.coefficient,
+        correction: term.correction,
+        product: product.toString(),
+        productMatches: product.toString() === term.product,
       };
     });
+    const sum = bigSum.toString();
+    const target = BigInt(input.target).toString();
     return {
       index: input.index,
       terms,
-      sum: String(total),
-      target: String(input.target),
-      satisfied: total === input.target,
+      sum,
+      target: input.target,
+      // 以本地精确复算为唯一判据：逐项乘积与服务端明细一致，
+      // 且左侧和与目标值精确相等（绝不依赖 Number 比较或服务端标志）。
+      satisfied:
+        sum === target && terms.every((term) => term.productMatches),
     };
   });
 }

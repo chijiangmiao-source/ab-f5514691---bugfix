@@ -130,14 +130,33 @@ def build_review_response(variables, matrix, target) -> dict:
     if result.solvable:
         solution = result.solution
         body["solution"] = [str(value) for value in solution]
-        body["constraintInputs"] = [
-            {
-                "index": index,
-                "coefficients": list(row),
-                "target": target[index],
-            }
-            for index, row in enumerate(matrix)
-        ]
+        # Per-constraint audit detail, computed server-side with exact
+        # arbitrary-precision integers.  Every value the engineer needs to
+        # re-check a constraint (coefficient, correction, term product,
+        # left-hand sum and target) is serialised as decimal text so that
+        # values beyond the IEEE-754 safe-integer range stay exact.
+        constraints = []
+        for index, row in enumerate(matrix):
+            products = [row[j] * solution[j] for j in range(len(variables))]
+            left_sum = sum(products)
+            constraints.append(
+                {
+                    "index": index,
+                    "terms": [
+                        {
+                            "variable": variables[j],
+                            "coefficient": str(row[j]),
+                            "correction": str(solution[j]),
+                            "product": str(products[j]),
+                        }
+                        for j in range(len(variables))
+                    ],
+                    "sum": str(left_sum),
+                    "target": str(target[index]),
+                    "satisfied": left_sum == target[index],
+                }
+            )
+        body["constraints"] = constraints
         body["homogeneousBasis"] = [
             [str(value) for value in vector] for vector in result.homogeneous_basis
         ]
